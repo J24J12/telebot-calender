@@ -6,6 +6,12 @@ import telebot
 from telebot import types
 from flask import Flask, request
 
+import sys
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
+
+
 # ─────────────────────────────────────────────────────────────
 # EDIT THIS: your fixed list of names for the group
 # ─────────────────────────────────────────────────────────────
@@ -237,9 +243,17 @@ def cmd_plans(message):
 
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
+    raw = request.get_data().decode("utf-8")
+    update = telebot.types.Update.de_json(raw)
+    if update.message:
+        log(f"MESSAGE from {update.message.from_user.id} in chat {update.message.chat.id}: {update.message.text!r}")
+        log(f"pending={pending} editing={editing}")
+    elif update.callback_query:
+        log(f"CALLBACK from {update.callback_query.from_user.id}: {update.callback_query.data!r}")
     bot.process_new_updates([update])
+    log("done processing")
     return "OK", 200
+
 
 
 @app.route("/", methods=["GET"])
