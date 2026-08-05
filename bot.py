@@ -14,9 +14,6 @@ PEOPLE = [
     "Yuan Yuan"
 ]
 
-# ─────────────────────────────────────────────────────────────
-# Config (set these as environment variables on your host)
-# ─────────────────────────────────────────────────────────────
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBHOOK_URL = os.environ["WEBHOOK_URL"]
 DB_PATH = os.environ.get("DB_PATH", "plans.db")
@@ -24,13 +21,20 @@ DB_PATH = os.environ.get("DB_PATH", "plans.db")
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
 
-pending = {}   # (chat_id, user_id) -> person, waiting for new plan text
-editing = {}   # (chat_id, user_id) -> plan_id, waiting for replacement text
+pending = {}
+editing = {}
 
 
-# ─────────────────────────────────────────────────────────────
-# Database
-# ─────────────────────────────────────────────────────────────
+def thread_kwargs(message):
+    if getattr(message, "is_topic_message", False):
+        return {"message_thread_id": message.message_thread_id}
+    return {}
+
+
+def is_plain_text(message):
+    return bool(message.text) and not message.text.startswith("/")
+
+
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -93,11 +97,7 @@ def get_plan(plan_id):
     return row
 
 
-# ─────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────
 def build_plan_picker(chat_id, callback_prefix):
-    """Builds an inline keyboard of this month's plans, one button per plan."""
     now = datetime.now(timezone.utc)
     rows = get_plans_for_month(chat_id, now.year, now.month)
     if not rows:
@@ -111,9 +111,6 @@ def build_plan_picker(chat_id, callback_prefix):
     return markup
 
 
-# ─────────────────────────────────────────────────────────────
-# Bot handlers
-# ─────────────────────────────────────────────────────────────
 @bot.message_handler(commands=["start", "help"])
 def cmd_start(message):
     bot.reply_to(
@@ -122,8 +119,17 @@ def cmd_start(message):
         "/addplan — add a new plan\n"
         "/editplan — edit an existing plan\n"
         "/deleteplan — delete a plan\n"
-        "/plans — show all plans for this month",
+        "/plans — show all plans for this month\n"
+        "/cancel — cancel whatever you're mid-way through",
+        **thread_kwargs(message),
     )
+
+
+@bot.message_handler(commands=["cancel"])
+def cmd_cancel(message):
+    key = (message.chat.id, message.from_user.id)
+    had_state = pending.pop(key, None) is not None or editing.pop(key, None) is not None
+    bot.reply_to(message, "Cancelled." if had_state else "Nothing to cancel.", **thread_kwargs(message))
 
 
 @bot.message_handler(commands=["addplan"])
@@ -131,7 +137,7 @@ def cmd_addplan(message):
     markup = types.InlineKeyboardMarkup(row_width=2)
     buttons = [types.InlineKeyboardButton(name, callback_data=f"who:{name}") for name in PEOPLE]
     markup.add(*buttons)
-    bot.reply_to(message, "Who is this plan for?", reply_markup=markup)
+    bot.reply_to(message, "Who is this plan for?", reply_markup=markup, **thread_kwargs(message))
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("who:"))
@@ -140,16 +146,16 @@ def on_person_selected(call):
     key = (call.message.chat.id, call.from_user.id)
     pending[key] = person
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, f"Got it — {person}. What's the plan?")
+    bot.send_message(call.message.chat.id, f"Got it — {person}. What's the plan?", **thread_kwargs(call.message))
 
 
 @bot.message_handler(commands=["editplan"])
 def cmd_editplan(message):
     markup = build_plan_picker(message.chat.id, "edit")
     if markup is None:
-        bot.reply_to(message, "No plans saved for this month yet.")
+        bot.reply_to(message, "No plans saved for this month yet.", **thread_kwargs(message))
         return
-    bot.reply_to(message, "Which plan do you want to edit?", reply_markup=markup)
+    bot.reply_to(message, "Which plan do you want to edit?", reply_markup=markup, **thread_kwargs(message))
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("edit:"))
@@ -158,16 +164,16 @@ def on_edit_selected(call):
     key = (call.message.chat.id, call.from_user.id)
     editing[key] = plan_id
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "Send the new text for this plan.")
+    bot.send_message(call.message.chat.id, "Send the new text for this plan.", **thread_kwargs(call.message))
 
 
 @bot.message_handler(commands=["deleteplan"])
 def cmd_deleteplan(message):
     markup = build_plan_picker(message.chat.id, "del")
     if markup is None:
-        bot.reply_to(message, "No plans saved for this month yet.")
+        bot.reply_to(message, "No plans saved for this month yet.", **thread_kwargs(message))
         return
-    bot.reply_to(message, "Which plan do you want to delete?", reply_markup=markup)
+    bot.reply_to(message, "Which plan do you want to delete?", reply_markup=markup, **thread_kwargs(message))
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("del:"))
@@ -187,23 +193,23 @@ def on_delete_selected(call):
 
 
 @bot.message_handler(
-    func=lambda message: (message.chat.id, message.from_user.id) in editing
+    func=lambda message: (message.chat.id, message.from_user.id) in editing and is_plain_text(message)
 )
 def on_edit_text(message):
     key = (message.chat.id, message.from_user.id)
     plan_id = editing.pop(key)
     update_plan_text(plan_id, message.text)
-    bot.reply_to(message, f"✅ Updated: {message.text}")
+    bot.reply_to(message, f"✅ Updated: {message.text}", **thread_kwargs(message))
 
 
 @bot.message_handler(
-    func=lambda message: (message.chat.id, message.from_user.id) in pending
+    func=lambda message: (message.chat.id, message.from_user.id) in pending and is_plain_text(message)
 )
 def on_plan_text(message):
     key = (message.chat.id, message.from_user.id)
     person = pending.pop(key)
     add_plan(message.chat.id, person, message.text)
-    bot.reply_to(message, f"✅ Saved for {person}: {message.text}")
+    bot.reply_to(message, f"✅ Saved for {person}: {message.text}", **thread_kwargs(message))
 
 
 @bot.message_handler(commands=["plans"])
@@ -212,7 +218,7 @@ def cmd_plans(message):
     rows = get_plans_for_month(message.chat.id, now.year, now.month)
 
     if not rows:
-        bot.reply_to(message, "No plans saved for this month yet.")
+        bot.reply_to(message, "No plans saved for this month yet.", **thread_kwargs(message))
         return
 
     by_person = {}
@@ -226,12 +232,9 @@ def cmd_plans(message):
             lines.append(f"  • {p}")
         lines.append("")
 
-    bot.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+    bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", **thread_kwargs(message))
 
 
-# ─────────────────────────────────────────────────────────────
-# Flask webhook routes
-# ─────────────────────────────────────────────────────────────
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
