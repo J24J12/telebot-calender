@@ -21,7 +21,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]          # from @BotFather
 WEBHOOK_URL = os.environ["WEBHOOK_URL"]      # e.g. https://your-app.onrender.com
 DB_PATH = os.environ.get("DB_PATH", "plans.db")
 
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
 
 # in-memory state: tracks who is mid-flow (chat_id, user_id) -> selected person
