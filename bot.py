@@ -10,10 +10,8 @@ from flask import Flask, request
 # EDIT THIS: your fixed list of names for the group
 # ─────────────────────────────────────────────────────────────
 PEOPLE = [
-    "Alice",
-    "Bob",
-    "Charlie",
-    "Dana",
+    "Jeremy",
+    "Yuan Yuan"
 ]
 
 # ─────────────────────────────────────────────────────────────
